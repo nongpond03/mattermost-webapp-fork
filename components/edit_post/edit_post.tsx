@@ -1,15 +1,15 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import React, {useCallback, useEffect, useRef, useState} from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import classNames from 'classnames';
-import {useIntl} from 'react-intl';
-import {EmoticonPlusOutlineIcon} from '@mattermost/compass-icons/components';
+import { useIntl } from 'react-intl';
+import { EmoticonPlusOutlineIcon } from '@mattermost/compass-icons/components';
 
-import {Post} from '@mattermost/types/posts';
-import {Emoji, SystemEmoji} from '@mattermost/types/emojis';
+import { Post } from '@mattermost/types/posts';
+import { Emoji, SystemEmoji } from '@mattermost/types/emojis';
 
-import {AppEvents, Constants, ModalIdentifiers, StoragePrefixes} from 'utils/constants';
+import { AppEvents, Constants, ModalIdentifiers, StoragePrefixes } from 'utils/constants';
 import {
     formatGithubCodePaste,
     formatMarkdownMessage,
@@ -17,17 +17,28 @@ import {
     hasHtmlLink,
     isGitHubCodeBlock,
 } from 'utils/paste';
-import {postMessageOnKeyPress, splitMessageBasedOnCaretPosition} from 'utils/post_utils';
-import {applyMarkdown, ApplyMarkdownOptions} from 'utils/markdown/apply_markdown';
+import { postMessageOnKeyPress, splitMessageBasedOnCaretPosition } from 'utils/post_utils';
+import { applyMarkdown, ApplyMarkdownOptions } from 'utils/markdown/apply_markdown';
 import * as Utils from 'utils/utils';
 
 import DeletePostModal from 'components/delete_post_modal';
 import EmojiPickerOverlay from 'components/emoji_picker/emoji_picker_overlay';
-import Textbox, {TextboxClass, TextboxElement} from 'components/textbox';
-import {ModalData} from 'types/actions';
-import {PostDraft} from '../../types/store/draft';
+import Textbox, { TextboxClass, TextboxElement } from 'components/textbox';
+import { ModalData } from 'types/actions';
+import { PostDraft } from '../../types/store/draft';
 
-import EditPostFooter from './edit_post_footer';
+import { sortFileInfos } from 'mattermost-redux/utils/file_utils';
+import { FilePreviewInfo } from 'components/file_preview/file_preview';
+import FilePreview from 'components/file_preview';
+import TexteditorActions from 'components/advanced_text_editor/texteditor_actions/texteditor_actions';
+import ToggleFormattingBar from 'components/advanced_text_editor/toggle_formatting_bar/toggle_formatting_bar';
+import FileUpload from 'components/file_upload';
+import { FileUpload as FileUploadClass } from 'components/file_upload/file_upload';
+import { FormattingBarSpacer, Separator } from 'components/advanced_text_editor/formatting_bar/formatting_bar';
+import { ServerError } from '@mattermost/types/errors';
+import { FileInfo } from '@mattermost/types/files';
+import FormattingBar from 'components/advanced_text_editor/formatting_bar/formatting_bar';
+import AutoHeightSwitcher from '../common/auto_height_switcher';
 
 type DialogProps = {
     post?: Post;
@@ -69,11 +80,25 @@ export type Props = {
     isRHSOpened: boolean;
     isEditHistoryShowing: boolean;
     actions: Actions;
+
+    uploadsProgressPercent: { [clientID: string]: FilePreviewInfo };
+    removePreview: (id: string) => void;
+    fileUploadRef: React.RefObject<FileUploadClass>;
+    getFileUploadTarget: () => HTMLInputElement | null;
+    handleUploadProgress: (filePreviewInfo: FilePreviewInfo) => void;
+    handleUploadError: (err: string | ServerError, clientId?: string, channelId?: string) => void;
+    handleFileUploadComplete: (fileInfos: FileInfo[], clientIds: string[], channelId: string, rootId?: string) => void;
+    handleUploadStart: (clientIds: string[], channelId: string) => void;
+    handleFileUploadChange: () => void;
+    toggleAdvanceTextEditor: () => void;
+    postId: string;
+    applyMarkdownx: (params: ApplyMarkdownOptions) => void;
+    additionalControls?: React.ReactNodeArray;
 };
 
 export type State = {
     editText: string;
-    selectionRange: {start: number; end: number};
+    selectionRange: { start: number; end: number };
     postError: React.ReactNode;
     errorClass: string | null;
     showEmojiPicker: boolean;
@@ -82,22 +107,80 @@ export type State = {
     prevShowState: boolean;
 };
 
-const {KeyCodes} = Constants;
+const { KeyCodes } = Constants;
 
 const TOP_OFFSET = 0;
 const RIGHT_OFFSET = 10;
 
-const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, ...rest}: Props): JSX.Element | null => {
+const EditPost = ({
+    additionalControls,
+    applyMarkdownx, postId, handleUploadProgress,
+    toggleAdvanceTextEditor,
+    handleUploadError,
+    handleFileUploadComplete,
+    handleUploadStart,
+    handleFileUploadChange, getFileUploadTarget, fileUploadRef, uploadsProgressPercent, removePreview, editingPost, actions, canEditPost, config, channelId, draft, ...rest }: Props): JSX.Element | null => {
+
+    const textboxRef = useRef<TextboxClass>(null);
+    const editorActionsRef = useRef<HTMLDivElement>(null);
+    const getCurrentValue = useCallback(() => textboxRef.current?.getInputBox().value, [textboxRef]);
+    const getCurrentSelection = useCallback(() => {
+        const input = textboxRef.current?.getInputBox();
+
+        return {
+            start: input.selectionStart,
+            end: input.selectionEnd,
+        };
+    }, [textboxRef]);
+
+    const formattingBar = (
+        <AutoHeightSwitcher
+            showSlot={1}
+            slot1={(
+                <FormattingBar
+                    applyMarkdown={applyMarkdownx}
+                    getCurrentMessage={getCurrentValue}
+                    getCurrentSelection={getCurrentSelection}
+                    disableControls={true}
+                    additionalControls={additionalControls}
+                    location={"post_textbox"}
+                />
+            )
+            }
+            slot2={null}
+        />
+    );
+
+    const getFileCount = () => {
+        return draft.fileInfos.length + draft.uploadsInProgress.length;
+    };
+
+    const readOnlyChannel = !canEditPost;
+    const fileUploadJSX = readOnlyChannel ? null : (
+        <FileUpload
+            ref={fileUploadRef}
+            fileCount={getFileCount()}
+            getTarget={getFileUploadTarget}
+            onFileUploadChange={handleFileUploadChange}
+            onUploadStart={handleUploadStart}
+            onFileUpload={handleFileUploadComplete}
+            onUploadError={handleUploadError}
+            onUploadProgress={handleUploadProgress}
+            rootId={postId}
+            channelId={channelId}
+            postType='post'
+        />
+    );
+
     const [editText, setEditText] = useState<string>(
         draft.message || editingPost?.post?.message_source || editingPost?.post?.message || '',
     );
-    const [selectionRange, setSelectionRange] = useState<State['selectionRange']>({start: editText.length, end: editText.length});
+    const [selectionRange, setSelectionRange] = useState<State['selectionRange']>({ start: editText.length, end: editText.length });
     const [postError, setPostError] = useState<React.ReactNode | null>(null);
     const [errorClass, setErrorClass] = useState<string>('');
     const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
     const [renderScrollbar, setRenderScrollbar] = useState<boolean>(false);
 
-    const textboxRef = useRef<TextboxClass>(null);
     const emojiButtonRef = useRef<HTMLButtonElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -105,11 +188,11 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
     // If we would just use the editText value from the state it would be a stale since it is encapsuled in the
     // function closure on initial render
     const draftRef = useRef<PostDraft>(draft);
-    const saveDraftFrame = useRef<number|null>();
+    const saveDraftFrame = useRef<number | null>();
 
     const draftStorageId = `${StoragePrefixes.EDIT_DRAFT}${editingPost.postId}`;
 
-    const {formatMessage} = useIntl();
+    const { formatMessage } = useIntl();
 
     const saveDraft = useCallback(() => {
         // to be run on unmount and only when there is an active saveDraftFrame timer
@@ -148,10 +231,10 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
     }, [selectionRange]);
 
     // just a helper so it's not always needed to update with setting both properties to the same value
-    const setCaretPosition = (position: number) => setSelectionRange({start: position, end: position});
+    const setCaretPosition = (position: number) => setSelectionRange({ start: position, end: position });
 
     const handlePaste = useCallback((e: ClipboardEvent) => {
-        const {clipboardData, target} = e;
+        const { clipboardData, target } = e;
         if (
             !clipboardData ||
             !clipboardData.items ||
@@ -173,7 +256,7 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
         let newCaretPosition = selectionRange.start;
 
         if (table && isGitHubCodeBlock(table.className)) {
-            const {formattedMessage, formattedCodeBlock} = formatGithubCodePaste({selectionStart: (target as any).selectionStart, selectionEnd: (target as any).selectionEnd, message, clipboardData});
+            const { formattedMessage, formattedCodeBlock } = formatGithubCodePaste({ selectionStart: (target as any).selectionStart, selectionEnd: (target as any).selectionEnd, message, clipboardData });
             message = formattedMessage;
             newCaretPosition = selectionRange.start + formattedCodeBlock.length;
         } else {
@@ -186,7 +269,7 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
     }, [canEditPost, selectionRange, editText]);
 
     const isSaveDisabled = () => {
-        const {post} = editingPost;
+        const { post } = editingPost;
         const hasAttachments = post && post.file_ids && post.file_ids.length > 0;
 
         if (hasAttachments) {
@@ -208,10 +291,10 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
         const res = applyMarkdown(params);
 
         setEditText(res.message);
-        setSelectionRange({start: res.selectionStart, end: res.selectionEnd});
+        setSelectionRange({ start: res.selectionStart, end: res.selectionEnd });
     };
 
-    const handleRefocusAndExit = (refocusId: string|null) => {
+    const handleRefocusAndExit = (refocusId: string | null) => {
         if (refocusId) {
             const element = document.getElementById(refocusId);
             element?.focus();
@@ -272,10 +355,10 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
     };
 
     const handleEditKeyPress = (e: React.KeyboardEvent) => {
-        const {ctrlSend, codeBlockOnCtrlEnter} = rest;
+        const { ctrlSend, codeBlockOnCtrlEnter } = rest;
         const inputBox = textboxRef.current?.getInputBox();
 
-        const {allowSending, ignoreKeyPress} = postMessageOnKeyPress(
+        const { allowSending, ignoreKeyPress } = postMessageOnKeyPress(
             e,
             editText,
             ctrlSend,
@@ -299,7 +382,7 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<TextboxElement>) => {
-        const {ctrlSend, codeBlockOnCtrlEnter} = rest;
+        const { ctrlSend, codeBlockOnCtrlEnter } = rest;
 
         const ctrlOrMetaKeyPressed = e.ctrlKey || e.metaKey;
         const ctrlKeyCombo = Utils.cmdOrCtrlPressed(e) && !e.altKey && !e.shiftKey;
@@ -384,7 +467,7 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
         let newCaretPosition = newMessage.length;
 
         if (editText.length > 0) {
-            const {firstPiece, lastPiece} = splitMessageBasedOnCaretPosition(
+            const { firstPiece, lastPiece } = splitMessageBasedOnCaretPosition(
                 selectionRange.start,
                 editText,
             );
@@ -440,6 +523,24 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
         defaultMessage: 'Emoji Picker',
     }).toLowerCase();
 
+    let attachmentPreview = null;
+
+    console.log("fileInfos: ", draft.fileInfos.length)
+    console.log("uploadsInProgress: ", draft.uploadsInProgress.length)
+
+    //const sortedFileInfos = useMemo(() => sortFileInfos(fileInfos ? [...fileInfos] : [], locale), [fileInfos, locale]);
+
+    if (draft.fileInfos.length > 0 || draft.uploadsInProgress.length > 0) {
+        attachmentPreview = (
+            <FilePreview
+                fileInfos={draft.fileInfos}
+                onRemove={removePreview}
+                uploadsInProgress={draft.uploadsInProgress}
+                uploadsProgressPercent={uploadsProgressPercent}
+            />
+        );
+    }
+
     if (config.EnableEmojiPicker === 'true') {
         emojiPicker = (
             <>
@@ -471,46 +572,65 @@ const EditPost = ({editingPost, actions, canEditPost, config, channelId, draft, 
     }
 
     return (
-        <div
-            className={classNames('post--editing__wrapper', {
-                scroll: renderScrollbar,
-            })}
-            ref={wrapperRef}
-        >
-            <Textbox
-                tabIndex={0}
-                rootId={editingPost.post ? Utils.getRootId(editingPost.post) : ''}
-                onChange={handleChange}
-                onKeyPress={handleEditKeyPress}
-                onKeyDown={handleKeyDown}
-                onSelect={handleSelect}
-                onHeightChange={handleHeightChange}
-                handlePostError={handlePostError}
-                onPaste={handlePaste}
-                value={editText}
-                channelId={channelId}
-                emojiEnabled={config.EnableEmojiPicker === 'true'}
-                createMessage={formatMessage({id: 'edit_post.editPost', defaultMessage: 'Edit the post...'})}
-                supportsCommands={false}
-                suggestionListPosition='bottom'
-                id='edit_textbox'
-                ref={textboxRef}
-                characterLimit={rest.maxPostSize}
-                useChannelMentions={rest.useChannelMentions}
-            />
-            <div className='post-body__actions'>
-                {emojiPicker}
-            </div>
-            <EditPostFooter
-                onSave={handleEdit}
-                onCancel={handleAutomatedRefocusAndExit}
-            />
-            {postError && (
-                <div className={classNames('edit-post-footer', {'has-error': postError})}>
-                    <label className={classNames('post-error', errorClass)}>{postError}</label>
+        <>
+            <div
+                className={'AdvancedTextEditor__body'}
+            >
+                <div
+                    className='AdvancedTextEditor__cell a11y__region'
+                ></div>
+                <div
+                    className={classNames('post--editing__wrapper', {
+                        scroll: renderScrollbar,
+                    })}
+                    ref={wrapperRef}
+                >
+                    <Textbox
+                        tabIndex={0}
+                        rootId={editingPost.post ? Utils.getRootId(editingPost.post) : ''}
+                        onChange={handleChange}
+                        onKeyPress={handleEditKeyPress}
+                        onKeyDown={handleKeyDown}
+                        onSelect={handleSelect}
+                        onHeightChange={handleHeightChange}
+                        handlePostError={handlePostError}
+                        onPaste={handlePaste}
+                        value={editText}
+                        channelId={channelId}
+                        emojiEnabled={config.EnableEmojiPicker === 'true'}
+                        createMessage={formatMessage({ id: 'edit_post.editPost', defaultMessage: 'Edit the post...' })}
+                        supportsCommands={false}
+                        suggestionListPosition='bottom'
+                        id='edit_textbox'
+                        ref={textboxRef}
+                        characterLimit={rest.maxPostSize}
+                        useChannelMentions={rest.useChannelMentions}
+                    />
+                    {attachmentPreview}
+                    <FormattingBarSpacer>
+                        {formattingBar}
+                    </FormattingBarSpacer>
+                    <TexteditorActions
+                        ref={editorActionsRef}
+                        placement='bottom'
+                    >
+                        <ToggleFormattingBar
+                            onClick={toggleAdvanceTextEditor}
+                            active={true}
+                            disabled={true}
+                        />
+                        <Separator />
+                        {fileUploadJSX}
+                        {emojiPicker}
+                    </TexteditorActions>
+                    {postError && (
+                        <div className={classNames('edit-post-footer', { 'has-error': postError })}>
+                            <label className={classNames('post-error', errorClass)}>{postError}</label>
+                        </div>
+                    )}
                 </div>
-            )}
-        </div>
+            </div>
+        </>
     );
 };
 
