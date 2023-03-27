@@ -1,33 +1,37 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import {connect} from 'react-redux';
-import {ActionCreatorsMapObject, bindActionCreators, Dispatch} from 'redux';
+import { connect } from 'react-redux';
+import { ActionCreatorsMapObject, bindActionCreators, Dispatch } from 'redux';
 
-import {addMessageIntoHistory, getPostEditHistory} from 'mattermost-redux/actions/posts';
-import {Preferences, Permissions} from 'mattermost-redux/constants';
-import {getConfig} from 'mattermost-redux/selectors/entities/general';
-import {getChannel} from 'mattermost-redux/selectors/entities/channels';
-import {haveIChannelPermission} from 'mattermost-redux/selectors/entities/roles';
-import {getCurrentTeamId} from 'mattermost-redux/selectors/entities/teams';
-import {getCurrentUserId, isCurrentUserSystemAdmin} from 'mattermost-redux/selectors/entities/users';
-import {getBool} from 'mattermost-redux/selectors/entities/preferences';
+import { addMessageIntoHistory, getPostEditHistory } from 'mattermost-redux/actions/posts';
+import { Preferences, Permissions } from 'mattermost-redux/constants';
+import { getConfig } from 'mattermost-redux/selectors/entities/general';
+import { getChannel } from 'mattermost-redux/selectors/entities/channels';
+import { haveIChannelPermission } from 'mattermost-redux/selectors/entities/roles';
+import { getCurrentTeamId } from 'mattermost-redux/selectors/entities/teams';
+import { getCurrentUserId, isCurrentUserSystemAdmin } from 'mattermost-redux/selectors/entities/users';
+import { getBool } from 'mattermost-redux/selectors/entities/preferences';
 
-import {unsetEditingPost} from 'actions/post_actions';
-import {openModal} from 'actions/views/modals';
-import {scrollPostListToBottom} from 'actions/views/channel';
-import {editPost} from 'actions/views/posts';
-import {getEditingPost} from 'selectors/posts';
-import {GlobalState} from 'types/store';
-import Constants, {RHSStates, StoragePrefixes} from 'utils/constants';
-import {setGlobalItem} from '../../actions/storage';
-import {getIsRhsOpen, getPostDraft, getRhsState} from '../../selectors/rhs';
+import { unsetEditingPost } from 'actions/post_actions';
+import { openModal } from 'actions/views/modals';
+import { scrollPostListToBottom } from 'actions/views/channel';
+import { editPost } from 'actions/views/posts';
+import { getEditingPost } from 'selectors/posts';
+import { makeGetFilesForPost } from 'mattermost-redux/selectors/entities/files';
+import { GlobalState } from 'types/store';
+import Constants, { RHSStates, StoragePrefixes } from 'utils/constants';
+import { setGlobalItem } from '../../actions/storage';
+import { getIsRhsOpen, getPostDraft, getRhsState } from '../../selectors/rhs';
 
-import EditPost, {Actions} from './edit_post';
+import EditPost, { Actions } from './edit_post';
 
 function mapStateToProps(state: GlobalState) {
+    const selectFilesForPost = makeGetFilesForPost();
+
     const config = getConfig(state);
     const editingPost = getEditingPost(state);
+    const editingFiles = selectFilesForPost(state, editingPost.postId);
     const currentUserId = getCurrentUserId(state);
     const channelId = editingPost.post.channel_id;
     const teamId = getCurrentTeamId(state);
@@ -48,6 +52,7 @@ function mapStateToProps(state: GlobalState) {
         draft,
         config,
         editingPost,
+        editingFiles,
         teamId,
         channelId,
         maxPostSize: parseInt(config.MaxPostSize || '0', 10) || Constants.DEFAULT_CHARACTER_LIMIT,

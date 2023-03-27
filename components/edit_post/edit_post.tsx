@@ -77,6 +77,7 @@ export type Props = {
         title?: string;
         isRHS?: boolean;
     };
+    editingFiles: FileInfo[];
     isRHSOpened: boolean;
     isEditHistoryShowing: boolean;
     actions: Actions;
@@ -94,6 +95,8 @@ export type Props = {
     postId: string;
     applyMarkdownx: (params: ApplyMarkdownOptions) => void;
     additionalControls?: React.ReactNodeArray;
+    fileInfos: FileInfo[];
+    locale: string;
 };
 
 export type State = {
@@ -113,13 +116,25 @@ const TOP_OFFSET = 0;
 const RIGHT_OFFSET = 10;
 
 const EditPost = ({
+    locale,
+    fileInfos,
     additionalControls,
     applyMarkdownx, postId, handleUploadProgress,
     toggleAdvanceTextEditor,
     handleUploadError,
     handleFileUploadComplete,
     handleUploadStart,
-    handleFileUploadChange, getFileUploadTarget, fileUploadRef, uploadsProgressPercent, removePreview, editingPost, actions, canEditPost, config, channelId, draft, ...rest }: Props): JSX.Element | null => {
+    handleFileUploadChange, getFileUploadTarget,
+    fileUploadRef,
+    uploadsProgressPercent,
+    removePreview,
+    editingPost,
+    editingFiles,
+    actions,
+    canEditPost,
+    config,
+    channelId,
+    draft, ...rest }: Props): JSX.Element | null => {
 
     const textboxRef = useRef<TextboxClass>(null);
     const editorActionsRef = useRef<HTMLDivElement>(null);
@@ -304,6 +319,10 @@ const EditPost = ({
     };
 
     const handleAutomatedRefocusAndExit = () => handleRefocusAndExit(editingPost.refocusId || null);
+
+    const hasAttachment = Boolean(
+        editingPost.post?.file_ids && editingPost.post?.file_ids.length > 0,
+    );
 
     const handleEdit = async () => {
         if (!editingPost.post || isSaveDisabled()) {
@@ -525,15 +544,13 @@ const EditPost = ({
 
     let attachmentPreview = null;
 
-    console.log("fileInfos: ", draft.fileInfos.length)
-    console.log("uploadsInProgress: ", draft.uploadsInProgress.length)
+    console.log("hasAttachment: ", hasAttachment);
 
-    //const sortedFileInfos = useMemo(() => sortFileInfos(fileInfos ? [...fileInfos] : [], locale), [fileInfos, locale]);
-
-    if (draft.fileInfos.length > 0 || draft.uploadsInProgress.length > 0) {
+    if (hasAttachment) {
+        console.log("files: ", editingFiles)
         attachmentPreview = (
             <FilePreview
-                fileInfos={draft.fileInfos}
+                fileInfos={editingFiles}
                 onRemove={removePreview}
                 uploadsInProgress={draft.uploadsInProgress}
                 uploadsProgressPercent={uploadsProgressPercent}
@@ -610,10 +627,7 @@ const EditPost = ({
                     <FormattingBarSpacer>
                         {formattingBar}
                     </FormattingBarSpacer>
-                    <TexteditorActions
-                        ref={editorActionsRef}
-                        placement='bottom'
-                    >
+                    <TexteditorActions ref={editorActionsRef} placement='bottom' >
                         <ToggleFormattingBar
                             onClick={toggleAdvanceTextEditor}
                             active={true}
